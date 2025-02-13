@@ -1,0 +1,1 @@
+docker build --debug -t ghcr.io/greydwarf/japp:0.0.1 -f docker/Dockerfile .

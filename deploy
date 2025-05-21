@@ -1,0 +1,259 @@
+#! /bin/bash
+
+script_dir=$(dirname "$(readlink -f "$0")")
+compose_file="$script_dir/docker-compose.yml"
+nginx_conf="$script_dir/nginx.conf"
+
+
+ensure_deps() {
+    # Check if yq is installed
+    if ! command -v yq &> /dev/null; then
+        echo "Error: yq is not installed. Please use the initialize command to install all requirements."
+        exit 1
+    fi
+}
+
+initialize() {
+    # Update apk package index
+    echo "Installing required dependencies..."
+    apk update
+
+    apk add --no-cache yq
+}
+
+get_docker_tag() {
+    local service="$1"
+
+    if [[ "$service" != "blue" && "$service" != "green" ]]; then
+        echo "Error: Service must be 'blue' or 'green'."
+        return 1
+    fi
+
+    # Use yq to extract the image tag for the specified service
+    local image_tag
+    image_tag=$(yq eval ".services.$service.image" "$compose_file" 2>/dev/null)
+
+    if [[ -z "$image_tag" ]]; then
+        echo "Error: Could not find image tag for service '$service'."
+        return 1
+    fi
+
+    echo "$image_tag"
+}
+
+
+active() {
+    if [[ ! -f "$nginx_conf" ]]; then
+        echo "Error: $nginx_conf file not found."
+        return 1
+    fi
+
+    # Extract the proxy_pass value from the "location / {" section
+    local active_service
+    active_service=$(awk '/location \/ {/,/}/ { if ($1 == "proxy_pass") print $2 }' "$nginx_conf" | sed 's/http:\/\/\(.*\);/\1/')
+
+    if [[ "$active_service" == "blue" || "$active_service" == "green" ]]; then
+        echo "$active_service"
+    else
+        echo "Error: Could not determine the active service."
+        return 1
+    fi
+}
+
+upgrade_docker_compose() {
+    local service="$1"
+    local new_version="$2"
+
+    if [[ "$service" != "blue" && "$service" != "green" ]]; then
+        echo "Error: Service must be 'blue' or 'green'."
+        return 1
+    fi
+
+    if [[ -z "$new_version" ]]; then
+        echo "Error: New version must be provided."
+        return 1
+    fi
+
+    # Update the image tag in the docker-compose.yml file using yq
+    echo "Updating $service service to version $new_version in $compose_file..."
+    yq eval ".services.$service.image = \"$new_version\"" -i "$compose_file"
+
+    # Verify the update
+    local updated_version
+    updated_version=$(yq eval ".services.$service.image" "$compose_file" 2>/dev/null)
+
+    if [[ "$updated_version" == "$new_version" ]]; then
+        echo "Successfully updated $service service to version $new_version."
+    else
+        echo "Error: Failed to update $service service to version $new_version."
+        return 1
+    fi
+}
+
+info() {
+    # Ensure dependencies are installed
+    ensure_deps
+
+    # Get the active service
+    local active_service
+    active_service=$(active)
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Unable to determine the active service."
+        return 1
+    fi
+
+    # Get the Docker tags for blue and green
+    local blue_version green_version
+    blue_version=$(get_docker_tag blue)
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Unable to retrieve the version for the blue service."
+        return 1
+    fi
+
+    green_version=$(get_docker_tag green)
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Unable to retrieve the version for the green service."
+        return 1
+    fi
+
+    # Display the information
+    echo "Blue Service Version: $blue_version"
+    echo "Green Service Version: $green_version"
+    echo "Active Service: $active_service"
+}
+
+upgrade() {
+    local new_version="$1"
+    if [[ -z "$new_version" ]]; then
+        echo "Error: New version must be provided."
+        return 1
+    fi
+
+    # Check if the service is currently active
+    local active_service
+    active_service=$(active)
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Unable to determine the active service."
+        return 1
+    fi
+
+    if [[ "$active_service" == "blue" ]]; then
+        local service="green"
+    elif [[ "$active_service" == "green" ]]; then
+        local service="blue"
+    else
+        echo "Error: Invalid active service."
+        return 1
+    fi
+
+    # Get the current version of the service
+    local current_version
+    current_version=$(get_docker_tag "$service")
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Unable to retrieve the current version for the $service service."
+        return 1
+    fi
+
+    # Upgrade the service
+    upgrade_docker_compose "$service" "$new_version"
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Failed to upgrade the $service service."
+        return 1
+    fi
+
+    # Display the upgrade information
+    echo "The $service service was upgraded from version $current_version to $new_version."
+    info
+}
+
+toggle() {
+    if [[ ! -f "$nginx_conf" ]]; then
+        echo "Error: $nginx_conf file not found."
+        return 1
+    fi
+
+    # Determine the current active service
+    local current_service
+    current_service=$(awk '/location \/ {/,/}/ { if ($1 == "proxy_pass") print $2 }' "$nginx_conf" | sed 's/http:\/\/\(.*\);/\1/')
+
+    if [[ "$current_service" != "blue" && "$current_service" != "green" ]]; then
+        echo "Error: Could not determine the current active service."
+        return 1
+    fi
+
+    # Determine the new service to toggle to
+    local new_service
+    if [[ "$current_service" == "blue" ]]; then
+        new_service="green"
+    else
+        new_service="blue"
+    fi
+
+    # Update the nginx.conf file to toggle the service
+    sed -i "s|proxy_pass http://$current_service;|proxy_pass http://$new_service;|" "$nginx_conf"
+
+    # Verify the change
+    local updated_service
+    updated_service=$(awk '/location \/ {/,/}/ { if ($1 == "proxy_pass") print $2 }' "$nginx_conf" | sed 's/http:\/\/\(.*\);/\1/')
+
+    if [[ "$updated_service" != "$new_service" ]]; then
+        echo "Error: Failed to toggle the default service."
+        return 1
+    fi
+
+    # Restart the Docker container to apply the changes
+    echo "Restarting Docker container to apply changes..."
+    docker kill --signal SIGHUP nginx
+
+    # Verify the restart
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Failed to restart the Docker container."
+        return 1
+    fi
+    echo "Successfully toggled the default service to $new_service."
+}
+
+usage() {
+    local self=$(basename "$0")
+
+    echo "Usage: ./$self <command> [arguments]"
+    echo
+    echo "This script is a deployment tool for managing blue-green deployments using Docker and NGINX."
+    echo "It provides commands to initialize dependencies, retrieve service information, upgrade services, and toggle active services."
+    echo
+    echo "Commands:"
+    echo "  initialize          Installs required dependencies (yq and Docker) using apk."
+    echo "  info                Displays the current versions of the blue and green services and the active service."
+    echo "  upgrade <new_version>"
+    echo "                      Upgrades the inactive service (blue or green) to the provided new version."
+    echo "  toggle              Toggles the active service between blue and green w/o down time by updating the NGINX configuration."
+    echo "  help                Displays this help message."
+    echo
+    echo "Examples:"
+    echo "  ./$script_name initialize"
+    echo "  ./$self info"
+    echo "  ./$self upgrade 1.2.3"
+    echo "  ./$self toggle"
+}
+command="$1"
+shift # Remove the first argument (command) and leave the rest as arguments for the function
+
+case "$command" in
+    initialize)
+        initialize "$@"
+        ;;
+    info)
+        active "$@"
+        ;;
+    upgrade)
+        upgrade "$@"
+        ;;
+    toggle)
+        toggle "$@"
+        ;;
+    *)
+        echo "Error: Invalid command '$command'."
+        usage
+        return 1
+        ;;
+esac

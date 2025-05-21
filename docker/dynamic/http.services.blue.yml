@@ -1,6 +1,0 @@
-http:
-  services:
-    blue:
-      loadBalancer:
-        servers:
-          - url: 'http://blue/'

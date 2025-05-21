@@ -1,7 +1,0 @@
-http:
-  services:
-    green:
-      loadBalancer:
-        servers:
-          - url: 'http://green/'
-

@@ -1,0 +1,29 @@
+services:
+  blue:
+    image: first-hello
+    container_name: blue
+    ports:
+      - '8001:8000'
+    environment:
+      - EXAMPLE=production
+    restart: unless-stopped
+
+  green:
+    image: first-hello
+    container_name: green
+    ports:
+      - '8002:8000'
+    environment:
+      - EXAMPLE=production
+    restart: unless-stopped
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-proxy
+    ports:
+      - '80:80'
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - blue
+      - green
+    restart: unless-stopped

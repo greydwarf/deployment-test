@@ -1,6 +1,6 @@
 services:
   blue:
-    image: first-hello
+    image: ghcr.io/greydwarf/first-hello:main
     container_name: blue
     ports:
       - '8001:8000'
@@ -9,7 +9,7 @@ services:
     restart: unless-stopped
 
   green:
-    image: first-hello
+    image: ghcr.io/greydwarf/first-hello:main
     container_name: green
     ports:
       - '8002:8000'

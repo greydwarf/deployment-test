@@ -16,14 +16,15 @@ ensure_deps() {
 initialize() {
     # Update apk package index
     echo "Installing required dependencies..."
-    apk update
-
-    apk add --no-cache yq
+    apt update
+    apt upgrade -y
+    apt-get install -y docker.io docker-compose-v2 yq jq
+    usermod -aG docker ubuntu
 
     # start the green/blue services, with blue the default
     cd "$script_dir" || exit 1
     echo "Starting Docker containers..."
-    docker-compose -f "$compose_file" up -d
+    docker compose -f "$compose_file" up -d
 }
 
 get_docker_tag() {
@@ -36,7 +37,7 @@ get_docker_tag() {
 
     # Use yq to extract the image tag for the specified service
     local image_tag
-    image_tag=$(yq eval ".services.$service.image" "$compose_file" 2>/dev/null)
+    image_tag=$(yq -r ".services.$service.image" "$compose_file" | cut -d: -f2 2>/dev/null)
 
     if [[ -z "$image_tag" ]]; then
         echo "Error: Could not find image tag for service '$service'."
@@ -81,11 +82,10 @@ upgrade_docker_compose() {
 
     # Update the image tag in the docker-compose.yml file using yq
     echo "Updating $service service to version $new_version in $compose_file..."
-    yq eval ".services.$service.image = \"$new_version\"" -i "$compose_file"
-
+    yq -y -i ".services.$service.image = \"$new_version\"" "$compose_file"
     # Verify the update
     local updated_version
-    updated_version=$(yq eval ".services.$service.image" "$compose_file" 2>/dev/null)
+    updated_version=$(yq -r ".services.$service.image" "$compose_file" 2>/dev/null)
 
     if [[ "$updated_version" == "$new_version" ]]; then
         echo "Successfully updated $service service to version $new_version."
@@ -96,9 +96,6 @@ upgrade_docker_compose() {
 }
 
 info() {
-    # Ensure dependencies are installed
-    ensure_deps
-
     # Get the active service
     local active_service
     active_service=$(active)
@@ -141,7 +138,6 @@ upgrade() {
         echo "Error: Unable to determine the active service."
         return 1
     fi
-
     if [[ "$active_service" == "blue" ]]; then
         local service="green"
     elif [[ "$active_service" == "green" ]]; then
@@ -166,8 +162,6 @@ upgrade() {
         return 1
     fi
 
-    # Display the upgrade information
-    echo "The $service service was upgraded from version $current_version to $new_version."
     info
 }
 
@@ -208,7 +202,7 @@ toggle() {
 
     # Restart the Docker container to apply the changes
     echo "Restarting Docker container to apply changes..."
-    docker kill --signal SIGHUP nginx
+    docker kill --signal SIGHUP nginx-proxy
 
     # Verify the restart
     if [[ $? -ne 0 ]]; then
@@ -248,7 +242,7 @@ case "$command" in
         initialize "$@"
         ;;
     info)
-        active "$@"
+        info "$@"
         ;;
     upgrade)
         upgrade "$@"

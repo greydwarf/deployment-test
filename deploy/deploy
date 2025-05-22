@@ -20,11 +20,6 @@ initialize() {
     apt upgrade -y
     apt-get install -y docker.io docker-compose-v2 yq jq
     usermod -aG docker ubuntu
-
-    # start the green/blue services, with blue the default
-    cd "$script_dir" || exit 1
-    echo "Starting Docker containers..."
-    docker compose -f "$compose_file" up -d
 }
 
 get_docker_tag() {
@@ -93,6 +88,17 @@ upgrade_docker_compose() {
         echo "Error: Failed to update $service service to version $new_version."
         return 1
     fi
+}
+launch () {
+    # start the green/blue services, with blue the default
+    cd "$script_dir" || exit 1
+    echo "Starting Docker containers..."
+    docker compose -f "$compose_file" up -d
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Failed to start Docker containers."
+        return 1
+    fi
+    echo "Docker containers started successfully."
 }
 
 info() {
@@ -222,6 +228,7 @@ usage() {
     echo
     echo "Commands:"
     echo "  initialize          Installs required dependencies (yq and Docker) using apk."
+    echo "  launch              Starts the Docker containers for blue and green services."
     echo "  info                Displays the current versions of the blue and green services and the active service."
     echo "  upgrade <new_version>"
     echo "                      Upgrades the inactive service (blue or green) to the provided new version."
